@@ -1,145 +1,146 @@
-# MANUAL — asusctl + Cardwire en Debian/derivados
+# Manual — asusctl-rogcontrol
 
-## 1. Antes de empezar
+Explicación detallada de cada paso del script, permisos que pide, y cómo
+revertir la instalación.
 
-Este manual acompaña a `setup-asusctl-cardwire-debian.sh`. Está pensado para
-una instalación **limpia**, sin asusctl, supergfxctl ni Cardwire instalados
-previamente.
+---
 
-Comprueba manualmente antes de ejecutar el script:
+## Requisitos previos
 
-```bash
-echo $XDG_SESSION_TYPE     # debe decir "wayland"
-uname -r                   # debe ser >= 6.6
-cat /sys/kernel/security/lsm   # debe incluir "bpf" en la lista
-```
+- Debian 13 (trixie) o derivado reciente.
+- Usuario con permisos de `sudo` (no ejecutar el script como root).
+- Kernel >= 6.6 (Debian 13 trae 6.12 por defecto; el script lo comprueba y
+  aborta si no se cumple).
+- Conexión a internet (para clonar asusctl, instalar rustup, y descargar
+  paquetes de apt).
 
-Si `/sys/kernel/security/lsm` no incluye `bpf`, hay que activarlo a mano
-antes de continuar (ver sección 5).
+No hace falta sesión Wayland ni tener BPF LSM activo — esas eran
+restricciones específicas de Cardwire, que ya no forma parte de este
+proyecto.
 
-## 2. Permisos
+---
 
-El script pide `sudo` en varios puntos (instalación de paquetes,
-`checkinstall` para empaquetar e instalar asusctl, activación de servicios
-systemd, y opcionalmente enmascarar `power-profiles-daemon`). No hace falta
-ejecutar el script completo como root; usa `sudo` internamente solo donde es
-necesario. Lo mismo aplica al script de desinstalación.
+## 1. Comprobaciones previas
 
-No modifica `/etc/default/grub` ni otros archivos de arranque de forma
-automática — si hace falta tocar GRUB (ver sección 5), es un paso manual
-deliberado, para no arriesgar el arranque del sistema sin supervisión.
+El script verifica la versión de kernel (`uname -r`) contra el mínimo
+6.6 que exige asusctl, y aborta con un mensaje claro si no se cumple.
 
-## 3. Qué hace el script, paso a paso
+## 2. Dependencias de compilación
 
-1. **Comprobaciones previas**: sesión Wayland, versión de kernel, BPF LSM.
-   Si alguna falla de forma bloqueante, el script se detiene sin tocar nada.
-2. **Dependencias apt**: instala las librerías de compilación necesarias
-   para asusctl y Cardwire (lista revisada para evitar duplicados y
-   paquetes inexistentes).
-3. **Rust**: si detecta `cargo`/`rustc` instalados vía `apt`, los quita
-   (para evitar builds rotos por versiones antiguas) e instala Rust vía
-   `rustup`.
-4. **asusctl**: clona la versión indicada, aplica un parche al grupo de las
-   reglas udev (`wheel` → `sudo`, ya que Debian/Ubuntu no usa el grupo
-   `wheel`), compila con `make`, y lo empaqueta e instala con
-   `checkinstall` (en vez de `sudo make install` a pelo) para que quede
-   registrado en dpkg como el paquete `asusctl` — así se puede desinstalar
-   limpiamente con `apt purge` más adelante. Activa el servicio `asusd`.
-5. **Cardwire**: determina la última versión siguiendo la redirección
-   pública de `https://github.com/.../releases/latest` (sin consultar la
-   API de GitHub, para no toparse con su límite de 60 peticiones/hora sin
-   autenticar — un problema real detectado al probar el script en una VM
-   con IP compartida), descarga el `.deb` correspondiente, lo instala con
-   `apt`, y activa el servicio `cardwired`.
-6. **Conflicto conocido**: si `power-profiles-daemon` está activo, pregunta
-   si quieres enmascararlo (puede chocar con la gestión de energía de
-   `asusd`). Queda registrado en el estado si se hizo, para poder
-   revertirlo luego.
-7. **Validación final**: muestra el estado de ambos servicios y ejecuta
-   `asusctl -s` y `cardwire list` para confirmar que detectan el hardware
-   real, no solo que el proceso está "activo".
-8. **Estado guardado**: al final deja un registro en
-   `~/.local/state/asusctl-cardwire-debian/install.env` con qué cambios de
-   sistema hizo (si quitó cargo/rustc de apt, si instaló rustup desde
-   cero, si enmascaró power-profiles-daemon). El script de desinstalación
-   lee ese archivo para revertir solo lo que él mismo cambió, no lo que ya
-   tenías configurado de antes.
+Instala, vía `apt`, todas las librerías necesarias para compilar asusctl y
+rog-control-center desde código fuente: herramientas de build
+(`build-essential`, `cmake`, `pkg-config`, `checkinstall`), librerías de
+sistema (udev, PCI, sysfs, GTK, X11/Wayland, Vulkan, etc.) y `npm` (para la
+parte de interfaz de rog-control-center).
 
-## 4. Verificación manual posterior
+Estas dependencias **no se desinstalan** en el revertido, porque son
+librerías de sistema que puede compartir otro software instalado en el
+equipo — quitarlas a ciegas es más arriesgado que dejarlas.
 
-```bash
-systemctl status asusd
-systemctl status cardwired
-asusctl -s
-cardwire list
-cardwire get
-```
+## 3. Rust (rustup)
 
-`cardwire list` debe mostrar tu iGPU y dGPU con sus IDs; `cardwire get`
-debe mostrar el modo actual (por defecto, Cardwire arranca en modo
-Hybrid).
+asusctl está escrito en Rust. El script:
 
-## 5. Si `CONFIG_BPF_LSM` no está activo
+1. Si detecta `cargo`/`rustc` instalados vía `apt` (versión de los repos de
+   Debian), los quita — suelen chocar con `rustup`.
+2. Si `rustup` no está instalado, lo instala desde `sh.rustup.rs`.
+3. Configura `stable` como toolchain por defecto.
 
-Editar `/etc/default/grub` y añadir `bpf` a la lista existente de
-`GRUB_CMDLINE_LINUX_DEFAULT` (sin borrar el resto):
+Ambas acciones quedan registradas en `~/.local/state/asusctl-rogcontrol/install.env`
+para que el desinstalador sepa si debe revertirlas.
+
+## 4. Compilar e instalar asusctl + rog-control-center
+
+1. Consulta la redirección pública de
+   `https://github.com/OpenGamingCollective/asusctl/releases/latest` para
+   obtener la última versión (el repo histórico en GitLab está archivado en
+   modo solo lectura desde hace tiempo, congelado en la versión 6.3.8; el
+   desarrollo activo continúa en este fork de GitHub).
+2. Clona esa versión exacta (`--depth=1 -b <tag>`).
+3. Aplica un parche de permisos udev si hace falta: las reglas originales
+   usaban el grupo `wheel` (convención de Fedora/Arch); Debian/Ubuntu usa
+   `sudo`. En versiones recientes del fork esto ya no aplica, pero el script
+   lo comprueba por si vuelve a cambiar.
+4. Compila con `make`.
+5. Empaqueta con `checkinstall` en vez de `make install` directo, para que
+   quede registrado en `dpkg` como el paquete `asusctl` — así se puede
+   desinstalar limpio después, sin tener que adivinar rutas de archivos.
+6. Habilita el servicio `asusd` y trata de arrancarlo. **Si falla el
+   arranque, el script no aborta**: es esperable en equipos sin hardware ASUS
+   ROG real (por ejemplo, una VM), ya que `asusd` necesita las interfaces
+   ACPI/WMI reales del portátil. El servicio queda `enabled` y arrancará solo
+   en el hardware real.
+
+## 5. switcheroo-control
+
+En vez de Cardwire, el script instala el paquete oficial de Debian:
 
 ```
-GRUB_CMDLINE_LINUX_DEFAULT="quiet splash lsm=landlock,lockdown,yama,integrity,apparmor,bpf"
+sudo apt install switcheroo-control
+sudo systemctl enable --now switcheroo-control
 ```
 
-Luego:
+Si el paquete ya estaba instalado (por ejemplo, si venía con tu entorno de
+escritorio), el script lo detecta y omite la instalación, pero igual se
+asegura de que el servicio esté habilitado y corriendo.
 
-```bash
-sudo update-grub
-sudo reboot
-```
+`switcheroo-control` es un servicio D-Bus: no "cambia" activamente la GPU en
+uso como pretendía hacer Cardwire, sino que expone qué GPUs hay disponibles y
+permite lanzar aplicaciones puntuales con la GPU dedicada, vía la variable de
+entorno `DRI_PRIME=1` o desde el menú contextual del escritorio ("Ejecutar
+usando la tarjeta gráfica dedicada"). Es el mismo mecanismo que usan Fedora y
+CachyOS por defecto.
 
-Tras reiniciar, repite la comprobación de `/sys/kernel/security/lsm` y
-vuelve a lanzar el script si se había detenido en ese punto.
+### Por qué switcheroo-control y no Cardwire
 
-## 6. Revertir / desinstalar
+- **Cardwire** es un proyecto comunitario para gestión de gráficos híbridos
+  vía eBPF LSM, marcado oficialmente como experimental por sus propios
+  desarrolladores, con soporte solo por Discord. En pruebas reales llegó a
+  dar conflictos de paquetes.
+- **switcheroo-control** es un paquete oficial de Debian (equipo de GNOME),
+  estable, sin restricciones de sesión (Wayland o X11 por igual), y es el
+  estándar de facto que ya usan Fedora y CachyOS.
 
-```bash
-chmod +x uninstall-asusctl-cardwire-debian.sh
-./uninstall-asusctl-cardwire-debian.sh
-```
+Si en algún momento Cardwire madura y se vuelve estable, se puede reevaluar
+como alternativa — pero por ahora este proyecto se queda con el enfoque que
+ya funciona en otras distros mainstream.
 
-Qué hace, en orden:
+## 6. power-profiles-daemon
 
-1. Lee `~/.local/state/asusctl-cardwire-debian/install.env` (si existe) para
-   saber exactamente qué cambió el instalador.
-2. Desactiva y purga `cardwired`/`cardwire` vía `apt purge` (paquete `.deb`
-   normal, sin trucos).
-3. Desactiva y purga `asusd`/`asusctl` vía `apt purge` — funciona porque el
-   instalador usó `checkinstall` en vez de `make install` a pelo, así que
-   asusctl y rog-control-center quedan registrados como paquete dpkg real,
-   no como archivos sueltos difíciles de rastrear. Si en algún momento se
-   instaló a mano sin `checkinstall`, el script imprime las rutas típicas a
-   revisar manualmente en vez de adivinar y borrar a ciegas.
-4. Si el instalador había enmascarado `power-profiles-daemon`, lo
-   desenmascara y reactiva.
-5. Si el instalador instaló `rustup` porque no existía antes, **pregunta**
-   si quieres quitarlo también (no lo hace por defecto, por si lo usas para
-   otra cosa). Si había quitado `cargo`/`rustc` de apt, pregunta si
-   quieres reinstalarlos.
-6. Pregunta si quieres borrar también el directorio de compilación
-   (`~/Proyectos/asusctl-cardwire-build`).
-7. Verificación final: confirma que los binarios y los servicios ya no
-   existen.
+`asusd` gestiona perfiles de energía, y puede chocar con
+`power-profiles-daemon` si ambos están activos. El script comprueba si está
+activo y, de ser así, **pregunta** antes de enmascararlo (nunca lo hace sin
+confirmación).
 
-Las **dependencias de compilación** instaladas por apt en el paso 1 del
-instalador (`libclang-dev`, `libbpf-dev`, `libgtk-3-dev`, etc.) no se
-desinstalan automáticamente: son librerías de sistema que puede compartir
-otro software, así que quitarlas a ciegas es más arriesgado que dejarlas.
-El script las deja instaladas a propósito.
+## 7. Validación final
 
-## 7. Notas / decisiones tomadas en este proyecto
+Al terminar, el script muestra:
 
-- Se descartó supergfxctl deliberadamente: está en desuso, Cardwire cubre
-  su función.
-- Se prefirió el `.deb` oficial de Cardwire (releases de GitHub) sobre
-  compilarlo desde fuente, por simplicidad — la opción de compilación
-  manual queda documentada en la investigación previa por si hiciera falta.
-- Cardwire exige Wayland; si en algún momento se necesita volver a X11,
-  este proyecto no aplicaría y habría que revisar alternativas.
+- Estado de `asusd` y `switcheroo-control` (`systemctl status`)
+- `asusctl info` (si `asusd` está activo)
+- `switcherooctl list` (GPUs detectadas)
+
+## Desinstalación (`uninstall-asusctl-rogcontrol.sh`)
+
+Lee el estado guardado en `~/.local/state/asusctl-rogcontrol/install.env` y
+revierte, en orden:
+
+1. **switcheroo-control**: solo lo purga si fue este script el que lo
+   instaló (si ya estaba antes, no lo toca).
+2. **asusctl / rog-control-center**: purga el paquete `asusctl` vía `apt`
+   (registrado por `checkinstall`). Si no está registrado en dpkg (por
+   ejemplo, si se instaló a mano sin `checkinstall`), imprime las rutas
+   típicas a revisar manualmente.
+3. **power-profiles-daemon**: lo desenmascara y reactiva solo si fue este
+   script el que lo enmascaró.
+4. **Rust (rustup / cargo-rustc de apt)**: pregunta explícitamente antes de
+   tocar nada, porque `rustup` puede estar en uso por otros proyectos ajenos
+   a este.
+5. **Directorio de compilación y estado**: pregunta antes de borrar
+   `~/Proyectos/asusctl-rogcontrol-build`.
+6. **Verificación final**: comprueba que los comandos y servicios ya no
+   existan.
+
+Las dependencias de compilación instaladas por `apt` (librerías de sistema)
+**no se quitan** en ningún caso, por ser software que puede compartir otro
+paquete instalado.

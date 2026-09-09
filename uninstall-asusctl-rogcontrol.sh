@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 #
-# uninstall-asusctl-cardwire-debian.sh
+# uninstall-asusctl-rogcontrol.sh
 #
-# Revierte todo lo que instaló setup-asusctl-cardwire-debian.sh: Cardwire,
+# Revierte todo lo que instaló setup-asusctl-rogcontrol.sh: switcheroo-control,
 # asusctl/rog-control-center, y cualquier cambio de sistema que el instalador
 # haya aplicado (enmascarar power-profiles-daemon, quitar cargo/rustc de
 # apt, instalar rustup). Deja el sistema lo más parecido posible a como
 # estaba antes de ejecutar el instalador.
 #
 # Uso:
-#   chmod +x uninstall-asusctl-cardwire-debian.sh
-#   ./uninstall-asusctl-cardwire-debian.sh
+#   chmod +x uninstall-asusctl-rogcontrol.sh
+#   ./uninstall-asusctl-rogcontrol.sh
 #
 # Lee el estado guardado por el instalador en:
-#   ~/.local/state/asusctl-cardwire-debian/install.env
+#   ~/.local/state/asusctl-rogcontrol/install.env
 # Si ese archivo no existe (por ejemplo, instalaste a mano o borraste el
 # estado), el script sigue funcionando pero pregunta en vez de asumir qué
 # cambios se hicieron.
 
 set -uo pipefail   # sin -e: queremos seguir aunque un paso de limpieza falle
 
-STATE_DIR="$HOME/.local/state/asusctl-cardwire-debian"
+STATE_DIR="$HOME/.local/state/asusctl-rogcontrol"
 STATE_FILE="$STATE_DIR/install.env"
-BUILD_DIR="$HOME/Proyectos/asusctl-cardwire-build"
+BUILD_DIR="$HOME/Proyectos/asusctl-rogcontrol-build"
 
 log()  { echo -e "\n\033[1;34m==>\033[0m $*"; }
 warn() { echo -e "\033[1;33m[AVISO]\033[0m $*"; }
@@ -39,6 +39,7 @@ confirm() {
 CARGO_RUSTC_REMOVED="desconocido"
 RUSTUP_INSTALLED_BY_SCRIPT="desconocido"
 PPD_MASKED_BY_SCRIPT="desconocido"
+SWITCHEROO_INSTALLED_BY_SCRIPT="desconocido"
 
 if [ -f "$STATE_FILE" ]; then
     log "Estado del instalador encontrado en $STATE_FILE"
@@ -47,30 +48,40 @@ if [ -f "$STATE_FILE" ]; then
     echo "  CARGO_RUSTC_REMOVED=$CARGO_RUSTC_REMOVED"
     echo "  RUSTUP_INSTALLED_BY_SCRIPT=$RUSTUP_INSTALLED_BY_SCRIPT"
     echo "  PPD_MASKED_BY_SCRIPT=$PPD_MASKED_BY_SCRIPT"
+    echo "  SWITCHEROO_INSTALLED_BY_SCRIPT=$SWITCHEROO_INSTALLED_BY_SCRIPT"
 else
     warn "No se encontró $STATE_FILE. Se puede seguir, pero el script preguntará en vez de asumir qué tocó el instalador."
 fi
 
 echo
-warn "Esto va a desinstalar Cardwire, asusctl y rog-control-center, y revertir"
-warn "los cambios de sistema conocidos que hizo el instalador."
+warn "Esto va a desinstalar asusctl, rog-control-center y (si lo instaló este"
+warn "script) switcheroo-control, y revertir los cambios de sistema conocidos."
 confirm "¿Continuar?" || { echo "Cancelado."; exit 0; }
 
 # ---------------------------------------------------------------------------
-# 1. Cardwire
+# 1. switcheroo-control (solo si lo instaló este script)
 # ---------------------------------------------------------------------------
 
-log "Quitando Cardwire"
+log "Revisando switcheroo-control"
 
-if systemctl list-unit-files 2>/dev/null | grep -q '^cardwired'; then
-    sudo systemctl disable --now cardwired 2>/dev/null || true
-fi
-
-if dpkg -l cardwire 2>/dev/null | grep -q '^ii'; then
-    sudo apt purge -y cardwire
-    ok "Paquete cardwire purgado con apt (dependencias intactas, no se tocan)."
+if [ "$SWITCHEROO_INSTALLED_BY_SCRIPT" = "si" ]; then
+    if dpkg -l switcheroo-control 2>/dev/null | grep -q '^ii'; then
+        sudo systemctl disable --now switcheroo-control 2>/dev/null || true
+        sudo apt purge -y switcheroo-control
+        ok "switcheroo-control purgado (lo había instalado este script)."
+    fi
+elif [ "$SWITCHEROO_INSTALLED_BY_SCRIPT" = "desconocido" ]; then
+    if dpkg -l switcheroo-control 2>/dev/null | grep -q '^ii'; then
+        warn "switcheroo-control está instalado pero no hay estado guardado que confirme si lo instaló este script."
+        confirm "¿Purgarlo igualmente?" && {
+            sudo systemctl disable --now switcheroo-control 2>/dev/null || true
+            sudo apt purge -y switcheroo-control
+        }
+    else
+        echo "  switcheroo-control no está instalado, nada que hacer."
+    fi
 else
-    warn "No se detectó el paquete 'cardwire' instalado vía apt/dpkg. Nada que purgar ahí."
+    echo "  switcheroo-control ya estaba instalado antes de este script; no se toca."
 fi
 
 # ---------------------------------------------------------------------------
@@ -78,8 +89,8 @@ fi
 # ---------------------------------------------------------------------------
 #
 # El instalador usa checkinstall para envolver "make install" en un paquete
-# dpkg real (nombre: asusctl), así que se puede desinstalar igual de limpio
-# que Cardwire, sin adivinar rutas de archivos a mano.
+# dpkg real (nombre: asusctl), así que se puede desinstalar limpio, sin
+# adivinar rutas de archivos a mano.
 
 log "Quitando asusctl / rog-control-center"
 
@@ -178,7 +189,7 @@ fi
 
 log "Verificación final"
 
-for cmd in asusctl cardwire rog-control-center; do
+for cmd in asusctl rog-control-center switcherooctl; do
     if command -v "$cmd" >/dev/null 2>&1; then
         warn "'$cmd' todavía se encuentra en el PATH (revisa manualmente)."
     else
@@ -186,7 +197,7 @@ for cmd in asusctl cardwire rog-control-center; do
     fi
 done
 
-for svc in asusd cardwired; do
+for svc in asusd switcheroo-control; do
     if systemctl list-unit-files 2>/dev/null | grep -q "^${svc}"; then
         warn "El servicio '$svc' todavía existe en systemd (revisa manualmente)."
     else
@@ -195,6 +206,6 @@ for svc in asusd cardwired; do
 done
 
 log "Desinstalación completada."
-echo "Las dependencias de compilación instaladas por apt (libclang-dev, libbpf-dev, etc.)"
+echo "Las dependencias de compilación instaladas por apt (libclang-dev, etc.)"
 echo "NO se han quitado a propósito: son librerías del sistema que puede usar otro software,"
 echo "así que quitarlas a ciegas es más arriesgado que dejarlas instaladas."
