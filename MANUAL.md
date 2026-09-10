@@ -71,74 +71,37 @@ para que el desinstalador sepa si debe revertirlas.
    ACPI/WMI reales del portátil. El servicio queda `enabled` y arrancará solo
    en el hardware real.
 
-## 5. switcheroo-control
-
-En vez de Cardwire, el script instala el paquete oficial de Debian:
-
-```
-sudo apt install switcheroo-control
-sudo systemctl enable --now switcheroo-control
-```
-
-Si el paquete ya estaba instalado (por ejemplo, si venía con tu entorno de
-escritorio), el script lo detecta y omite la instalación, pero igual se
-asegura de que el servicio esté habilitado y corriendo.
-
-`switcheroo-control` es un servicio D-Bus: no "cambia" activamente la GPU en
-uso como pretendía hacer Cardwire, sino que expone qué GPUs hay disponibles y
-permite lanzar aplicaciones puntuales con la GPU dedicada, vía la variable de
-entorno `DRI_PRIME=1` o desde el menú contextual del escritorio ("Ejecutar
-usando la tarjeta gráfica dedicada"). Es el mismo mecanismo que usan Fedora y
-CachyOS por defecto.
-
-### Por qué switcheroo-control y no Cardwire
-
-- **Cardwire** es un proyecto comunitario para gestión de gráficos híbridos
-  vía eBPF LSM, marcado oficialmente como experimental por sus propios
-  desarrolladores, con soporte solo por Discord. En pruebas reales llegó a
-  dar conflictos de paquetes.
-- **switcheroo-control** es un paquete oficial de Debian (equipo de GNOME),
-  estable, sin restricciones de sesión (Wayland o X11 por igual), y es el
-  estándar de facto que ya usan Fedora y CachyOS.
-
-Si en algún momento Cardwire madura y se vuelve estable, se puede reevaluar
-como alternativa — pero por ahora este proyecto se queda con el enfoque que
-ya funciona en otras distros mainstream.
-
-## 6. power-profiles-daemon
+## 5. power-profiles-daemon
 
 `asusd` gestiona perfiles de energía, y puede chocar con
 `power-profiles-daemon` si ambos están activos. El script comprueba si está
 activo y, de ser así, **pregunta** antes de enmascararlo (nunca lo hace sin
 confirmación).
 
-## 7. Validación final
+## 6. Validación final
 
 Al terminar, el script muestra:
 
-- Estado de `asusd` y `switcheroo-control` (`systemctl status`)
+- Estado de `asusd` (`systemctl status`)
 - `asusctl info` (si `asusd` está activo)
-- `switcherooctl list` (GPUs detectadas)
 
 ## Desinstalación (`uninstall-asusctl-rogcontrol.sh`)
 
 Lee el estado guardado en `~/.local/state/asusctl-rogcontrol/install.env` y
 revierte, en orden:
 
-1. **switcheroo-control**: solo lo purga si fue este script el que lo
-   instaló (si ya estaba antes, no lo toca).
-2. **asusctl / rog-control-center**: purga el paquete `asusctl` vía `apt`
+1. **asusctl / rog-control-center**: purga el paquete `asusctl` vía `apt`
    (registrado por `checkinstall`). Si no está registrado en dpkg (por
    ejemplo, si se instaló a mano sin `checkinstall`), imprime las rutas
    típicas a revisar manualmente.
-3. **power-profiles-daemon**: lo desenmascara y reactiva solo si fue este
+2. **power-profiles-daemon**: lo desenmascara y reactiva solo si fue este
    script el que lo enmascaró.
-4. **Rust (rustup / cargo-rustc de apt)**: pregunta explícitamente antes de
+3. **Rust (rustup / cargo-rustc de apt)**: pregunta explícitamente antes de
    tocar nada, porque `rustup` puede estar en uso por otros proyectos ajenos
    a este.
-5. **Directorio de compilación y estado**: pregunta antes de borrar
+4. **Directorio de compilación y estado**: pregunta antes de borrar
    `~/Proyectos/asusctl-rogcontrol-build`.
-6. **Verificación final**: comprueba que los comandos y servicios ya no
+5. **Verificación final**: comprueba que los comandos y servicios ya no
    existan.
 
 Las dependencias de compilación instaladas por `apt` (librerías de sistema)

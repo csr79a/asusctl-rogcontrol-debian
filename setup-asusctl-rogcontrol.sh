@@ -3,18 +3,14 @@
 # setup-asusctl-rogcontrol.sh
 #
 # Instala asusctl + rog-control-center (compilados desde código fuente, vía
-# checkinstall) y switcheroo-control (detección/gestión de GPU híbrida,
-# paquete oficial de Debian) en Debian y derivados (Debian 13/trixie o
-# posterior, KDE Plasma).
+# checkinstall) en Debian y derivados (Debian 13/trixie o posterior, KDE
+# Plasma).
 #
 # NO instala Cardwire ni supergfxctl: ambos proyectos quedaron descartados.
-# Cardwire seguía en beta y llegó a dar conflictos de paquetes; el enfoque
-# que usan Fedora y CachyOS por defecto es switcheroo-control, un servicio
-# D-Bus oficial y liviano que no requiere compilar nada.
+# Cardwire seguía en beta y llegó a dar conflictos de paquetes.
 #
-# Todo lo instalado queda registrado en dpkg (checkinstall para asusctl,
-# apt para switcheroo-control), así que se puede revertir limpiamente con
-# uninstall-asusctl-rogcontrol.sh.
+# Todo lo instalado queda registrado en dpkg (checkinstall para asusctl),
+# así que se puede revertir limpiamente con uninstall-asusctl-rogcontrol.sh.
 #
 # Uso:
 #   chmod +x setup-asusctl-rogcontrol.sh
@@ -62,8 +58,7 @@ echo "  - Kernel $KERNEL_VERSION: OK (>= 6.6)"
 
 # Nota: a diferencia de la versión anterior de este proyecto (que incluía
 # Cardwire), aquí ya no se exige sesión Wayland ni se comprueba BPF LSM:
-# ninguno de los dos componentes actuales (asusctl, switcheroo-control) lo
-# necesita. switcheroo-control funciona igual en Wayland y en X11.
+# asusctl no lo necesita.
 
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
@@ -198,35 +193,12 @@ if ! sudo systemctl start asusd; then
     warn "asusd necesita las interfaces ACPI/WMI reales del portátil para poder arrancar."
     warn "El servicio ha quedado 'enabled', así que arrancará solo en el hardware real."
     warn "Detalle: 'systemctl status asusd' / 'journalctl -xeu asusd.service'."
-    warn "Continuando con la instalación de switcheroo-control de todas formas."
 fi
 
 cd "$BUILD_DIR"
 
 # ---------------------------------------------------------------------------
-# 4. Instalar switcheroo-control (paquete oficial de Debian, gráficos híbridos)
-# ---------------------------------------------------------------------------
-#
-# switcheroo-control es el servicio D-Bus que usan por defecto Fedora y
-# CachyOS para exponer la disponibilidad de GPU dual (integrada + dedicada).
-# A diferencia de Cardwire, es un paquete oficial de Debian: no hace falta
-# compilarlo ni descargarlo de GitHub.
-
-log "Instalando switcheroo-control"
-
-SWITCHEROO_INSTALLED_BY_SCRIPT="no"
-if dpkg -l switcheroo-control 2>/dev/null | grep -q '^ii'; then
-    echo "  switcheroo-control ya estaba instalado, se omite este paso."
-else
-    sudo apt install -y switcheroo-control
-    SWITCHEROO_INSTALLED_BY_SCRIPT="si"
-fi
-state_set SWITCHEROO_INSTALLED_BY_SCRIPT "$SWITCHEROO_INSTALLED_BY_SCRIPT"
-
-sudo systemctl enable --now switcheroo-control
-
-# ---------------------------------------------------------------------------
-# 5. Conflicto conocido: power-profiles-daemon
+# 4. Conflicto conocido: power-profiles-daemon
 # ---------------------------------------------------------------------------
 
 PPD_MASKED_BY_SCRIPT="no"
@@ -241,16 +213,13 @@ fi
 state_set PPD_MASKED_BY_SCRIPT "$PPD_MASKED_BY_SCRIPT"
 
 # ---------------------------------------------------------------------------
-# 6. Validación final
+# 5. Validación final
 # ---------------------------------------------------------------------------
 
 log "Validación final"
 
 echo "--- asusd ---"
 systemctl status asusd --no-pager || true
-echo
-echo "--- switcheroo-control ---"
-systemctl status switcheroo-control --no-pager || true
 echo
 echo "--- asusctl info (versión y datos del sistema detectados) ---"
 if systemctl is-active --quiet asusd; then
@@ -260,13 +229,6 @@ if systemctl is-active --quiet asusd; then
     asusctl info || warn "asusctl info falló pese a que asusd está activo; revisa 'asusctl --help' por si la CLI ha cambiado de nuevo. Detalle: 'journalctl -u asusd'."
 else
     warn "asusd no está activo, se omite 'asusctl info' (no hay daemon con el que hablar; ver el aviso de la sección 3)."
-fi
-echo
-echo "--- switcherooctl list (GPUs detectadas) ---"
-if command -v switcherooctl >/dev/null 2>&1; then
-    switcherooctl list || warn "switcherooctl list falló; revisa 'journalctl -u switcheroo-control' para más detalle."
-else
-    warn "El comando 'switcherooctl' no está en el PATH todavía; puede requerir cerrar y abrir una terminal nueva."
 fi
 
 log "Instalación completada. Estado guardado en $STATE_FILE para el revertido."

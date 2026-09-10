@@ -2,11 +2,11 @@
 #
 # uninstall-asusctl-rogcontrol.sh
 #
-# Revierte todo lo que instaló setup-asusctl-rogcontrol.sh: switcheroo-control,
-# asusctl/rog-control-center, y cualquier cambio de sistema que el instalador
-# haya aplicado (enmascarar power-profiles-daemon, quitar cargo/rustc de
-# apt, instalar rustup). Deja el sistema lo más parecido posible a como
-# estaba antes de ejecutar el instalador.
+# Revierte todo lo que instaló setup-asusctl-rogcontrol.sh: asusctl/
+# rog-control-center, y cualquier cambio de sistema que el instalador haya
+# aplicado (enmascarar power-profiles-daemon, quitar cargo/rustc de apt,
+# instalar rustup). Deja el sistema lo más parecido posible a como estaba
+# antes de ejecutar el instalador.
 #
 # Uso:
 #   chmod +x uninstall-asusctl-rogcontrol.sh
@@ -39,7 +39,6 @@ confirm() {
 CARGO_RUSTC_REMOVED="desconocido"
 RUSTUP_INSTALLED_BY_SCRIPT="desconocido"
 PPD_MASKED_BY_SCRIPT="desconocido"
-SWITCHEROO_INSTALLED_BY_SCRIPT="desconocido"
 
 if [ -f "$STATE_FILE" ]; then
     log "Estado del instalador encontrado en $STATE_FILE"
@@ -48,44 +47,17 @@ if [ -f "$STATE_FILE" ]; then
     echo "  CARGO_RUSTC_REMOVED=$CARGO_RUSTC_REMOVED"
     echo "  RUSTUP_INSTALLED_BY_SCRIPT=$RUSTUP_INSTALLED_BY_SCRIPT"
     echo "  PPD_MASKED_BY_SCRIPT=$PPD_MASKED_BY_SCRIPT"
-    echo "  SWITCHEROO_INSTALLED_BY_SCRIPT=$SWITCHEROO_INSTALLED_BY_SCRIPT"
 else
     warn "No se encontró $STATE_FILE. Se puede seguir, pero el script preguntará en vez de asumir qué tocó el instalador."
 fi
 
 echo
-warn "Esto va a desinstalar asusctl, rog-control-center y (si lo instaló este"
-warn "script) switcheroo-control, y revertir los cambios de sistema conocidos."
+warn "Esto va a desinstalar asusctl y rog-control-center, y revertir los"
+warn "cambios de sistema conocidos."
 confirm "¿Continuar?" || { echo "Cancelado."; exit 0; }
 
 # ---------------------------------------------------------------------------
-# 1. switcheroo-control (solo si lo instaló este script)
-# ---------------------------------------------------------------------------
-
-log "Revisando switcheroo-control"
-
-if [ "$SWITCHEROO_INSTALLED_BY_SCRIPT" = "si" ]; then
-    if dpkg -l switcheroo-control 2>/dev/null | grep -q '^ii'; then
-        sudo systemctl disable --now switcheroo-control 2>/dev/null || true
-        sudo apt purge -y switcheroo-control
-        ok "switcheroo-control purgado (lo había instalado este script)."
-    fi
-elif [ "$SWITCHEROO_INSTALLED_BY_SCRIPT" = "desconocido" ]; then
-    if dpkg -l switcheroo-control 2>/dev/null | grep -q '^ii'; then
-        warn "switcheroo-control está instalado pero no hay estado guardado que confirme si lo instaló este script."
-        confirm "¿Purgarlo igualmente?" && {
-            sudo systemctl disable --now switcheroo-control 2>/dev/null || true
-            sudo apt purge -y switcheroo-control
-        }
-    else
-        echo "  switcheroo-control no está instalado, nada que hacer."
-    fi
-else
-    echo "  switcheroo-control ya estaba instalado antes de este script; no se toca."
-fi
-
-# ---------------------------------------------------------------------------
-# 2. asusctl / rog-control-center
+# 1. asusctl / rog-control-center
 # ---------------------------------------------------------------------------
 #
 # El instalador usa checkinstall para envolver "make install" en un paquete
@@ -119,7 +91,7 @@ sudo udevadm control --reload-rules 2>/dev/null || true
 sudo udevadm trigger 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 3. power-profiles-daemon (solo si el instalador lo enmascaró)
+# 2. power-profiles-daemon (solo si el instalador lo enmascaró)
 # ---------------------------------------------------------------------------
 
 log "Revisando power-profiles-daemon"
@@ -143,7 +115,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Rust (cargo/rustc de apt y rustup) — opcional, se pregunta siempre
+# 3. Rust (cargo/rustc de apt y rustup) — opcional, se pregunta siempre
 # ---------------------------------------------------------------------------
 #
 # Esto NO se revierte por defecto: rustup puede estar en uso por otros
@@ -170,7 +142,7 @@ if [ "$CARGO_RUSTC_REMOVED" = "si" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Directorio de compilación y estado
+# 4. Directorio de compilación y estado
 # ---------------------------------------------------------------------------
 
 log "Limpieza de archivos locales del proyecto"
@@ -184,12 +156,12 @@ if [ -f "$STATE_FILE" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Verificación final
+# 5. Verificación final
 # ---------------------------------------------------------------------------
 
 log "Verificación final"
 
-for cmd in asusctl rog-control-center switcherooctl; do
+for cmd in asusctl rog-control-center; do
     if command -v "$cmd" >/dev/null 2>&1; then
         warn "'$cmd' todavía se encuentra en el PATH (revisa manualmente)."
     else
@@ -197,7 +169,7 @@ for cmd in asusctl rog-control-center switcherooctl; do
     fi
 done
 
-for svc in asusd switcheroo-control; do
+for svc in asusd; do
     if systemctl list-unit-files 2>/dev/null | grep -q "^${svc}"; then
         warn "El servicio '$svc' todavía existe en systemd (revisa manualmente)."
     else
