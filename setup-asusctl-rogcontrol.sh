@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# setup-asusctl-rogcontrol.sh
+# setup-asusctl-rogcontrol.sh — Instalador de asusctl csr79a
 #
 # Instala asusctl + rog-control-center (compilados desde código fuente, vía
 # checkinstall) en Debian y derivados (Debian 13/trixie o posterior, KDE
@@ -12,6 +12,11 @@
 # Todo lo instalado queda registrado en dpkg (checkinstall para asusctl),
 # así que se puede revertir limpiamente con uninstall-asusctl-rogcontrol.sh.
 #
+# Interfaz por pantallas (whiptail) para bienvenida, decisiones y resumen
+# final; la compilación, checkinstall, la instalación de rustup y el
+# diagnóstico final se muestran como texto normal de terminal (no tiene
+# sentido meter esa salida dentro de una ventana).
+#
 # Uso:
 #   chmod +x setup-asusctl-rogcontrol.sh
 #   ./setup-asusctl-rogcontrol.sh
@@ -21,20 +26,20 @@
 
 set -euo pipefail
 
+TITLE="Instalador de asusctl csr79a"
+VERSION="1.0.0"
+
 BUILD_DIR="$HOME/Proyectos/asusctl-rogcontrol-build"
 STATE_DIR="$HOME/.local/state/asusctl-rogcontrol"
 STATE_FILE="$STATE_DIR/install.env"
 
 log()  { echo -e "\n\033[1;34m==>\033[0m $*"; }
 warn() { echo -e "\033[1;33m[AVISO]\033[0m $*"; }
+ok()   { echo -e "\033[1;32m[OK]\033[0m $*"; }
 die()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; exit 1; }
 
 confirm() {
-    read -r -p "$1 [s/N] " resp
-    case "$resp" in
-        [sS]) return 0 ;;
-        *) return 1 ;;
-    esac
+    whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-70}"
 }
 
 mkdir -p "$STATE_DIR"
@@ -42,8 +47,43 @@ mkdir -p "$STATE_DIR"
 state_set() { echo "$1=$2" >> "$STATE_FILE"; }
 
 # ---------------------------------------------------------------------------
-# 0. Comprobaciones previas (bloqueantes)
+# -1. Comprobaciones de entorno (usuario, apt, sudo, whiptail)
 # ---------------------------------------------------------------------------
+
+if [[ $EUID -eq 0 ]]; then
+    die "No ejecutes este script como root directamente. Usa tu usuario normal; se pedirá sudo cuando haga falta."
+fi
+
+if ! command -v apt >/dev/null 2>&1; then
+    die "Este script está pensado para sistemas basados en APT (Debian/derivados)."
+fi
+
+if ! command -v sudo >/dev/null 2>&1; then
+    die "No se encontró el comando 'sudo' en este sistema. Revisa la sección 'Requisitos previos: dejar sudo listo' del README antes de ejecutar este script."
+fi
+
+if ! command -v whiptail >/dev/null 2>&1; then
+    log "Instalando whiptail (necesario para las pantallas de este script)"
+    sudo apt update
+    sudo apt install -y whiptail
+fi
+
+log "Comprobando permisos de sudo..."
+if ! sudo -v; then
+    die "No se pudieron validar los permisos de sudo. Revisa la sección 'Requisitos previos: dejar sudo listo' del README."
+fi
+
+# ---------------------------------------------------------------------------
+# 0. Pantalla de bienvenida y comprobaciones previas (bloqueantes)
+# ---------------------------------------------------------------------------
+
+confirm "Versión del Instalador de asusctl csr79a ${VERSION}
+
+Este programa compila e instala asusctl + rog-control-center desde código fuente, y los registra en dpkg vía checkinstall para poder desinstalarlos limpiamente después.
+
+Requiere kernel >= 6.6 y hardware ASUS ROG para que asusd llegue a arrancar.
+
+¿Desea continuar?" 16 70 || exit 0
 
 log "Comprobando requisitos previos"
 
@@ -233,3 +273,18 @@ fi
 
 log "Instalación completada. Estado guardado en $STATE_FILE para el revertido."
 echo "Para desinstalar todo limpiamente, usa: ./uninstall-asusctl-rogcontrol.sh"
+
+SUMMARY="asusctl v${ASUSCTL_VERSION} instalado y registrado en dpkg.
+
+Para desinstalar todo limpiamente, usa: ./uninstall-asusctl-rogcontrol.sh"
+if systemctl is-active --quiet asusd; then
+    SUMMARY+="
+
+asusd está activo."
+else
+    SUMMARY+="
+
+asusd no ha arrancado (esperable en una VM sin hardware ASUS ROG real; en tu portátil real debería arrancar solo). Revisa 'systemctl status asusd' si tienes hardware real y no arranca."
+fi
+
+whiptail --title "$TITLE" --msgbox "$SUMMARY" 16 74
