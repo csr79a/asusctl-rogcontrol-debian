@@ -34,10 +34,9 @@ chmod +x setup-asusctl-rogcontrol.sh
 ./setup-asusctl-rogcontrol.sh
 ```
 
-El script se detiene en el primer error y pide confirmación antes de pasos
-sensibles (como enmascarar `power-profiles-daemon`). Revisa el contenido
-antes de ejecutarlo, especialmente si vas a lanzarlo en un equipo que no sea
-de pruebas. Guarda un registro de lo que cambió en
+El script se detiene en el primer error. Revisa el contenido antes de
+ejecutarlo, especialmente si vas a lanzarlo en un equipo que no sea de
+pruebas. Guarda un registro de lo que cambió en
 `~/.local/state/asusctl-rogcontrol/install.env`, que usa el script de
 desinstalación para revertir solo lo que él mismo tocó.
 
@@ -50,10 +49,10 @@ chmod +x uninstall-asusctl-rogcontrol.sh
 
 Quita asusctl/rog-control-center (vía `apt purge`, ya que queda registrado en
 dpkg), y revierte los cambios de sistema conocidos (desenmascarar
-`power-profiles-daemon` si el instalador lo enmascaró, opción de quitar
-rustup si lo instaló el propio script). Las dependencias de compilación
-instaladas por apt no se tocan, por ser librerías que puede compartir otro
-software.
+`power-profiles-daemon` si quedó enmascarado por una ejecución vieja del
+instalador, opción de quitar rustup si lo instaló el propio script). Las
+dependencias de compilación instaladas por apt no se tocan, por ser
+librerías que puede compartir otro software.
 
 Ver [MANUAL.md](./MANUAL.md) para el detalle de cada paso, permisos
 necesarios y cómo revertir la instalación.

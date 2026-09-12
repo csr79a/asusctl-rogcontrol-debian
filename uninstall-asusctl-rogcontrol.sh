@@ -4,9 +4,15 @@
 #
 # Revierte todo lo que instaló setup-asusctl-rogcontrol.sh: asusctl/
 # rog-control-center, y cualquier cambio de sistema que el instalador haya
-# aplicado (enmascarar power-profiles-daemon, quitar cargo/rustc de apt,
-# instalar rustup). Deja el sistema lo más parecido posible a como estaba
-# antes de ejecutar el instalador.
+# aplicado (rustup/cargo si aplica). Si vienes de una versión anterior de
+# este script que enmascaró power-profiles-daemon (versiones previas lo
+# hacían por error, ver setup-asusctl-rogcontrol.sh), también lo revierte.
+# Deja el sistema lo más parecido posible a como estaba antes de ejecutar
+# el instalador.
+#
+# Interfaz por pantallas (whiptail) para las confirmaciones; la salida de
+# apt/systemctl y el resumen técnico se muestran como texto normal de
+# terminal.
 #
 # Interfaz por pantallas (whiptail) para las confirmaciones; la salida de
 # apt/systemctl y el resumen técnico se muestran como texto normal de

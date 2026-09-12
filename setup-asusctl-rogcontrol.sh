@@ -238,19 +238,29 @@ fi
 cd "$BUILD_DIR"
 
 # ---------------------------------------------------------------------------
-# 4. Conflicto conocido: power-profiles-daemon
+# 4. power-profiles-daemon
 # ---------------------------------------------------------------------------
+#
+# NOTA (corregido): se creía que asusd chocaba con power-profiles-daemon y
+# había que enmascarar este último. Según la wiki de Arch sobre asusctl,
+# es al revés: el cambio de perfiles de energía de asusctl REQUIERE que
+# power-profiles-daemon esté corriendo. Enmascararlo rompe la integración
+# en vez de evitar un conflicto. Por eso este script ya NO lo toca; si en
+# tu sistema estaba enmascarado por una versión anterior de este script,
+# desenmascáralo con:
+#   sudo systemctl unmask power-profiles-daemon
+#   sudo systemctl enable --now power-profiles-daemon
 
 PPD_MASKED_BY_SCRIPT="no"
-if systemctl is-active --quiet power-profiles-daemon 2>/dev/null; then
-    warn "power-profiles-daemon está activo y puede chocar con asusd (perfiles de energía)."
-    if confirm "¿Enmascarar power-profiles-daemon ahora?"; then
-        sudo systemctl mask power-profiles-daemon
-        sudo systemctl stop power-profiles-daemon || true
-        PPD_MASKED_BY_SCRIPT="si"
-    fi
-fi
 state_set PPD_MASKED_BY_SCRIPT "$PPD_MASKED_BY_SCRIPT"
+
+log "Comprobando power-profiles-daemon (requerido por asusctl para cambiar perfiles de energía)"
+sudo apt install -y power-profiles-daemon
+if systemctl is-enabled power-profiles-daemon 2>/dev/null | grep -q masked; then
+    warn "power-profiles-daemon estaba enmascarado (posiblemente por una versión anterior de este script); desenmascarando."
+    sudo systemctl unmask power-profiles-daemon
+fi
+sudo systemctl enable --now power-profiles-daemon
 
 # ---------------------------------------------------------------------------
 # 5. Validación final
