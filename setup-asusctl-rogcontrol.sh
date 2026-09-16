@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# setup-asusctl-rogcontrol.sh
+# setup-asusctl-rogcontrol.sh — Instalador de asusctl csr79a
 #
 # Instala asusctl + rog-control-center (compilados desde código fuente, vía
 # checkinstall) en Debian y derivados (Debian 13/trixie o posterior, KDE
@@ -12,6 +12,11 @@
 # Todo lo instalado queda registrado en dpkg (checkinstall para asusctl),
 # así que se puede revertir limpiamente con uninstall-asusctl-rogcontrol.sh.
 #
+# Interfaz por pantallas (whiptail) para bienvenida, decisiones y resumen
+# final; la compilación, checkinstall, la instalación de rustup y el
+# diagnóstico final se muestran como texto normal de terminal (no tiene
+# sentido meter esa salida dentro de una ventana).
+#
 # Uso:
 #   chmod +x setup-asusctl-rogcontrol.sh
 #   ./setup-asusctl-rogcontrol.sh
@@ -21,20 +26,20 @@
 
 set -euo pipefail
 
+TITLE="Instalador de asusctl csr79a"
+VERSION="1.0.0"
+
 BUILD_DIR="$HOME/Proyectos/asusctl-rogcontrol-build"
 STATE_DIR="$HOME/.local/state/asusctl-rogcontrol"
 STATE_FILE="$STATE_DIR/install.env"
 
 log()  { echo -e "\n\033[1;34m==>\033[0m $*"; }
 warn() { echo -e "\033[1;33m[AVISO]\033[0m $*"; }
+ok()   { echo -e "\033[1;32m[OK]\033[0m $*"; }
 die()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; exit 1; }
 
 confirm() {
-    read -r -p "$1 [s/N] " resp
-    case "$resp" in
-        [sS]) return 0 ;;
-        *) return 1 ;;
-    esac
+    whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-70}"
 }
 
 mkdir -p "$STATE_DIR"
@@ -42,8 +47,43 @@ mkdir -p "$STATE_DIR"
 state_set() { echo "$1=$2" >> "$STATE_FILE"; }
 
 # ---------------------------------------------------------------------------
-# 0. Comprobaciones previas (bloqueantes)
+# -1. Comprobaciones de entorno (usuario, apt, sudo, whiptail)
 # ---------------------------------------------------------------------------
+
+if [[ $EUID -eq 0 ]]; then
+    die "No ejecutes este script como root directamente. Usa tu usuario normal; se pedirá sudo cuando haga falta."
+fi
+
+if ! command -v apt >/dev/null 2>&1; then
+    die "Este script está pensado para sistemas basados en APT (Debian/derivados)."
+fi
+
+if ! command -v sudo >/dev/null 2>&1; then
+    die "No se encontró el comando 'sudo' en este sistema. Revisa la sección 'Requisitos previos: dejar sudo listo' del README antes de ejecutar este script."
+fi
+
+if ! command -v whiptail >/dev/null 2>&1; then
+    log "Instalando whiptail (necesario para las pantallas de este script)"
+    sudo apt update
+    sudo apt install -y whiptail
+fi
+
+log "Comprobando permisos de sudo..."
+if ! sudo -v; then
+    die "No se pudieron validar los permisos de sudo. Revisa la sección 'Requisitos previos: dejar sudo listo' del README."
+fi
+
+# ---------------------------------------------------------------------------
+# 0. Pantalla de bienvenida y comprobaciones previas (bloqueantes)
+# ---------------------------------------------------------------------------
+
+confirm "Versión del Instalador de asusctl csr79a ${VERSION}
+
+Este programa compila e instala asusctl + rog-control-center desde código fuente, y los registra en dpkg vía checkinstall para poder desinstalarlos limpiamente después.
+
+Requiere kernel >= 6.6 y hardware ASUS ROG para que asusd llegue a arrancar.
+
+¿Desea continuar?" 16 70 || exit 0
 
 log "Comprobando requisitos previos"
 
@@ -142,6 +182,49 @@ fi
 ASUSCTL_VERSION="$ASUSCTL_TAG"
 log "Última versión detectada: $ASUSCTL_VERSION"
 
+# ---------------------------------------------------------------------------
+# 3b. Comprobar si ya está instalada esta versión (evita recompilar en vano)
+# ---------------------------------------------------------------------------
+#
+# Como asusctl se instala vía checkinstall, queda registrado en dpkg con la
+# versión que le pasamos (--pkgversion). Aprovechamos eso para comparar la
+# versión ya instalada contra la última tag detectada, y así no lanzarnos a
+# clonar/compilar si no hay nada nuevo.
+
+ASUSCTL_INSTALLED_VERSION=""
+if dpkg -l asusctl 2>/dev/null | grep -q '^ii'; then
+    ASUSCTL_INSTALLED_VERSION=$(dpkg-query -W -f='${Version}' asusctl 2>/dev/null || true)
+fi
+
+if [ -n "$ASUSCTL_INSTALLED_VERSION" ]; then
+    echo "  - Versión instalada actualmente: $ASUSCTL_INSTALLED_VERSION"
+fi
+
+# checkinstall añade su propio sufijo de revisión Debian (p.ej. "-1") a la
+# versión que le pasamos con --pkgversion, así que dpkg guarda "6.5.0-1"
+# aunque la tag real sea "6.5.0". Para comparar de forma justa, nos
+# quedamos solo con la parte anterior al primer guion.
+ASUSCTL_INSTALLED_VERSION_BASE="${ASUSCTL_INSTALLED_VERSION%%-*}"
+
+if [ "$ASUSCTL_INSTALLED_VERSION_BASE" = "$ASUSCTL_VERSION" ]; then
+    if ! confirm "Ya tienes instalada la última versión de asusctl (${ASUSCTL_VERSION}).
+
+No hay actualización disponible. ¿Quieres forzar la recompilación e instalación de todas formas?" 12 70; then
+        ok "No hay actualización disponible. Saliendo sin hacer cambios."
+        exit 0
+    fi
+    log "Forzando recompilación de la versión $ASUSCTL_VERSION (elegido manualmente)"
+else
+    if [ -n "$ASUSCTL_INSTALLED_VERSION" ]; then
+        log "Hay una actualización disponible: $ASUSCTL_INSTALLED_VERSION -> $ASUSCTL_VERSION"
+    else
+        log "asusctl no está instalado todavía. Se instalará la versión $ASUSCTL_VERSION"
+    fi
+fi
+# Nota: la comparación de arriba usa ASUSCTL_INSTALLED_VERSION_BASE (sin el
+# sufijo de checkinstall); el mensaje sigue mostrando la versión completa
+# con sufijo porque es la que realmente aparece en dpkg.
+
 log "Clonando y compilando asusctl v$ASUSCTL_VERSION"
 
 if [ ! -d "asusctl" ]; then
@@ -198,19 +281,29 @@ fi
 cd "$BUILD_DIR"
 
 # ---------------------------------------------------------------------------
-# 4. Conflicto conocido: power-profiles-daemon
+# 4. power-profiles-daemon
 # ---------------------------------------------------------------------------
+#
+# NOTA (corregido): se creía que asusd chocaba con power-profiles-daemon y
+# había que enmascarar este último. Según la wiki de Arch sobre asusctl,
+# es al revés: el cambio de perfiles de energía de asusctl REQUIERE que
+# power-profiles-daemon esté corriendo. Enmascararlo rompe la integración
+# en vez de evitar un conflicto. Por eso este script ya NO lo toca; si en
+# tu sistema estaba enmascarado por una versión anterior de este script,
+# desenmascáralo con:
+#   sudo systemctl unmask power-profiles-daemon
+#   sudo systemctl enable --now power-profiles-daemon
 
 PPD_MASKED_BY_SCRIPT="no"
-if systemctl is-active --quiet power-profiles-daemon 2>/dev/null; then
-    warn "power-profiles-daemon está activo y puede chocar con asusd (perfiles de energía)."
-    if confirm "¿Enmascarar power-profiles-daemon ahora?"; then
-        sudo systemctl mask power-profiles-daemon
-        sudo systemctl stop power-profiles-daemon || true
-        PPD_MASKED_BY_SCRIPT="si"
-    fi
-fi
 state_set PPD_MASKED_BY_SCRIPT "$PPD_MASKED_BY_SCRIPT"
+
+log "Comprobando power-profiles-daemon (requerido por asusctl para cambiar perfiles de energía)"
+sudo apt install -y power-profiles-daemon
+if systemctl is-enabled power-profiles-daemon 2>/dev/null | grep -q masked; then
+    warn "power-profiles-daemon estaba enmascarado (posiblemente por una versión anterior de este script); desenmascarando."
+    sudo systemctl unmask power-profiles-daemon
+fi
+sudo systemctl enable --now power-profiles-daemon
 
 # ---------------------------------------------------------------------------
 # 5. Validación final
@@ -233,3 +326,18 @@ fi
 
 log "Instalación completada. Estado guardado en $STATE_FILE para el revertido."
 echo "Para desinstalar todo limpiamente, usa: ./uninstall-asusctl-rogcontrol.sh"
+
+SUMMARY="asusctl v${ASUSCTL_VERSION} instalado y registrado en dpkg.
+
+Para desinstalar todo limpiamente, usa: ./uninstall-asusctl-rogcontrol.sh"
+if systemctl is-active --quiet asusd; then
+    SUMMARY+="
+
+asusd está activo."
+else
+    SUMMARY+="
+
+asusd no ha arrancado (esperable en una VM sin hardware ASUS ROG real; en tu portátil real debería arrancar solo). Revisa 'systemctl status asusd' si tienes hardware real y no arranca."
+fi
+
+whiptail --title "$TITLE" --msgbox "$SUMMARY" 16 74
