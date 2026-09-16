@@ -73,10 +73,13 @@ para que el desinstalador sepa si debe revertirlas.
 
 ## 5. power-profiles-daemon
 
-`asusd` gestiona perfiles de energía, y puede chocar con
-`power-profiles-daemon` si ambos están activos. El script comprueba si está
-activo y, de ser así, **pregunta** antes de enmascararlo (nunca lo hace sin
-confirmación).
+`asusd` necesita que `power-profiles-daemon` esté instalado y corriendo
+para poder cambiar de perfil de energía correctamente — según la
+documentación de asusctl, **se complementan, no compiten**. (Una versión
+anterior de este script asumía lo contrario y ofrecía enmascararlo; eso
+era un error, ya corregido.) El script se asegura de que el paquete esté
+instalado, lo desenmascara si venía enmascarado por una ejecución vieja, y
+lo activa.
 
 ## 6. Validación final
 
@@ -94,8 +97,10 @@ revierte, en orden:
    (registrado por `checkinstall`). Si no está registrado en dpkg (por
    ejemplo, si se instaló a mano sin `checkinstall`), imprime las rutas
    típicas a revisar manualmente.
-2. **power-profiles-daemon**: lo desenmascara y reactiva solo si fue este
-   script el que lo enmascaró.
+2. **power-profiles-daemon**: si detecta que quedó enmascarado por una
+   ejecución vieja del instalador (versiones anteriores lo enmascaraban
+   por error), lo desenmascara y reactiva. En instalaciones nuevas del
+   script no debería hacer falta, ya que ya no se enmascara.
 3. **Rust (rustup / cargo-rustc de apt)**: pregunta explícitamente antes de
    tocar nada, porque `rustup` puede estar en uso por otros proyectos ajenos
    a este.

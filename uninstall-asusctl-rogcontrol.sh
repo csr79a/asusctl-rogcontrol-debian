@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 #
-# uninstall-asusctl-rogcontrol.sh
+# uninstall-asusctl-rogcontrol.sh — Instalador de asusctl csr79a (desinstalación)
 #
 # Revierte todo lo que instaló setup-asusctl-rogcontrol.sh: asusctl/
 # rog-control-center, y cualquier cambio de sistema que el instalador haya
-# aplicado (enmascarar power-profiles-daemon, quitar cargo/rustc de apt,
-# instalar rustup). Deja el sistema lo más parecido posible a como estaba
-# antes de ejecutar el instalador.
+# aplicado (rustup/cargo si aplica). Si vienes de una versión anterior de
+# este script que enmascaró power-profiles-daemon (versiones previas lo
+# hacían por error, ver setup-asusctl-rogcontrol.sh), también lo revierte.
+# Deja el sistema lo más parecido posible a como estaba antes de ejecutar
+# el instalador.
+#
+# Interfaz por pantallas (whiptail) para las confirmaciones; la salida de
+# apt/systemctl y el resumen técnico se muestran como texto normal de
+# terminal.
 #
 # Uso:
 #   chmod +x uninstall-asusctl-rogcontrol.sh
@@ -20,6 +26,8 @@
 
 set -uo pipefail   # sin -e: queremos seguir aunque un paso de limpieza falle
 
+TITLE="Instalador de asusctl csr79a"
+
 STATE_DIR="$HOME/.local/state/asusctl-rogcontrol"
 STATE_FILE="$STATE_DIR/install.env"
 BUILD_DIR="$HOME/Proyectos/asusctl-rogcontrol-build"
@@ -29,12 +37,19 @@ warn() { echo -e "\033[1;33m[AVISO]\033[0m $*"; }
 ok()   { echo -e "\033[1;32m[OK]\033[0m $*"; }
 
 confirm() {
-    read -r -p "$1 [s/N] " resp
-    case "$resp" in
-        [sS]) return 0 ;;
-        *) return 1 ;;
-    esac
+    whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-70}"
 }
+
+if [[ $EUID -eq 0 ]]; then
+    echo -e "\033[1;31m[ERROR]\033[0m No ejecutes este script como root directamente. Usa tu usuario normal; se pedirá sudo cuando haga falta." >&2
+    exit 1
+fi
+
+if ! command -v whiptail >/dev/null 2>&1; then
+    log "Instalando whiptail (necesario para las pantallas de este script)"
+    sudo apt update
+    sudo apt install -y whiptail
+fi
 
 CARGO_RUSTC_REMOVED="desconocido"
 RUSTUP_INSTALLED_BY_SCRIPT="desconocido"
@@ -52,9 +67,9 @@ else
 fi
 
 echo
-warn "Esto va a desinstalar asusctl y rog-control-center, y revertir los"
-warn "cambios de sistema conocidos."
-confirm "¿Continuar?" || { echo "Cancelado."; exit 0; }
+confirm "Esto va a desinstalar asusctl y rog-control-center, y revertir los cambios de sistema conocidos (power-profiles-daemon, rustup/cargo si aplica).
+
+¿Continuar?" || { echo "Cancelado."; exit 0; }
 
 # ---------------------------------------------------------------------------
 # 1. asusctl / rog-control-center
@@ -181,3 +196,5 @@ log "Desinstalación completada."
 echo "Las dependencias de compilación instaladas por apt (libclang-dev, etc.)"
 echo "NO se han quitado a propósito: son librerías del sistema que puede usar otro software,"
 echo "así que quitarlas a ciegas es más arriesgado que dejarlas instaladas."
+
+whiptail --title "$TITLE" --msgbox "Desinstalación completada.\n\nRevisa el resumen impreso en la terminal para los detalles (dependencias de compilación conservadas a propósito, estado de Rust/rustup, etc.)." 12 74
