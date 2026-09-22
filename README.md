@@ -59,5 +59,6 @@ necesarios y cómo revertir la instalación.
 
 ## Estado
 
-Proyecto en desarrollo/revisión — pendiente de validar en una instalación
-limpia de Debian 13 con KDE Plasma antes de darlo por definitivo.
+Validado en máquina real, en Debian 13 (trixie) y en Debian Sid, con KDE
+Plasma. Instalación, desinstalación y verificación final funcionando
+correctamente en ambos casos.
