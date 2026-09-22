@@ -14,9 +14,10 @@ revertir la instalación.
 - Conexión a internet (para clonar asusctl, instalar rustup, y descargar
   paquetes de apt).
 
-No hace falta sesión Wayland ni tener BPF LSM activo — esas eran
-restricciones específicas de Cardwire, que ya no forma parte de este
-proyecto.
+No hace falta tener BPF LSM activo — esa era una restricción específica
+de Cardwire, que ya no forma parte de este proyecto. La sesión sí importa:
+usa **Wayland**, ya que en X11 `rog-control-center` no funciona
+correctamente.
 
 ---
 

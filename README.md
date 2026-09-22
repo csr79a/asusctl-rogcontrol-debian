@@ -24,8 +24,8 @@ dpkg (y se puedan desinstalar limpiamente).
 
 - Debian 13 (trixie) o derivado reciente — kernel 6.12 por defecto.
 - Kernel >= 6.6 (mínimo exigido por asusctl).
-- Funciona igual en sesión **Wayland o X11** — a diferencia de la versión
-anterior con Cardwire, ya no hay restricción de sesión.
+- Requiere sesión **Wayland**. En X11, `rog-control-center` no funciona
+correctamente.
 
 ## Uso
 
