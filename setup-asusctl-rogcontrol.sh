@@ -19,7 +19,10 @@
 #
 # Uso:
 #   chmod +x setup-asusctl-rogcontrol.sh
-#   ./setup-asusctl-rogcontrol.sh
+#   ./setup-asusctl-rogcontrol.sh            # instala/actualiza; si ya está la última
+#                                            # versión, lo dice y sale sin tocar nada
+#   ./setup-asusctl-rogcontrol.sh --check    # solo comprueba si hay actualización
+#   ./setup-asusctl-rogcontrol.sh --force    # recompila aunque ya esté actualizado
 #
 # El script se detiene en el primer error (set -e) y pide confirmación
 # antes de cada bloque grande. Revisa el contenido antes de ejecutarlo.
@@ -27,7 +30,7 @@
 set -euo pipefail
 
 TITLE="Instalador de asusctl csr79a"
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 BUILD_DIR="$HOME/Proyectos/asusctl-rogcontrol-build"
 STATE_DIR="$HOME/.local/state/asusctl-rogcontrol"
@@ -41,6 +44,94 @@ die()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; exit 1; }
 confirm() {
     whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-70}"
 }
+
+# ---------------------------------------------------------------------------
+# Opciones y comprobación de versión (ANTES de tocar nada)
+# ---------------------------------------------------------------------------
+#
+# Esta comprobación solo necesita curl y dpkg: no usa sudo, apt, whiptail ni
+# rustup, y se hace antes de crear o reescribir el fichero de estado. Así, si
+# no hay nada nuevo, el script solo lo dice y sale sin modificar el sistema.
+
+CHECK_ONLY=0
+FORCE=0
+
+usage() {
+    cat <<'EOF_USAGE'
+Uso: ./setup-asusctl-rogcontrol.sh [opciones]
+
+  (sin opciones)  Comprueba la última versión. Si ya está instalada, lo dice
+                  y sale sin cambiar nada. Si hay una versión nueva (o no está
+                  instalado), compila e instala.
+  -c, --check     Solo comprueba y muestra el estado; no instala nada.
+                  Código de salida: 0 = actualizado, 10 = hay actualización
+                  (o no está instalado), 1 = error.
+  -f, --force     Recompila e instala aunque ya esté la última versión.
+  -h, --help      Muestra esta ayuda.
+EOF_USAGE
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        -c|--check) CHECK_ONLY=1 ;;
+        -f|--force) FORCE=1 ;;
+        -h|--help)  usage; exit 0 ;;
+        *) echo "Opción desconocida: $arg" >&2; usage >&2; exit 1 ;;
+    esac
+done
+
+# gitlab.com/asus-linux/asusctl (el repo "oficial" histórico) está
+# ARCHIVADO (solo lectura) desde hace tiempo: su última tag se quedó
+# congelada en 6.3.8 y nunca tendrá versiones más nuevas. El desarrollo
+# activo continúa en GitHub, en OpenGamingCollective/asusctl. Seguimos la
+# redirección pública de /releases/latest (sin pasar por api.github.com)
+# para no depender de un número de versión fijo.
+asusctl_latest_tag() {
+    curl -sI --max-time 20 https://github.com/OpenGamingCollective/asusctl/releases/latest \
+        | grep -i '^location:' \
+        | sed 's#.*/tag/##' \
+        | tr -d '\r\n' || true
+}
+
+# Como asusctl se instala vía checkinstall, queda registrado en dpkg con la
+# versión que le pasamos (--pkgversion).
+asusctl_installed_version() {
+    if dpkg -l asusctl 2>/dev/null | grep -q '^ii'; then
+        dpkg-query -W -f='${Version}' asusctl 2>/dev/null || true
+    fi
+}
+
+command -v curl >/dev/null 2>&1 || die "Falta curl. Instálalo con: sudo apt install curl"
+
+ASUSCTL_VERSION="$(asusctl_latest_tag)"
+if [ -z "$ASUSCTL_VERSION" ]; then
+    die "No se pudo determinar la última versión de asusctl (¿sin conexión?). Revisa https://github.com/OpenGamingCollective/asusctl/releases"
+fi
+ASUSCTL_INSTALLED_VERSION="$(asusctl_installed_version)"
+
+# checkinstall añade su propio sufijo de revisión Debian (p.ej. "-1") a la
+# versión que le pasamos con --pkgversion, así que dpkg guarda "6.5.0-1"
+# aunque la tag real sea "6.5.0". Para comparar de forma justa, nos
+# quedamos solo con la parte anterior al primer guion.
+ASUSCTL_INSTALLED_VERSION_BASE="${ASUSCTL_INSTALLED_VERSION%%-*}"
+
+if [ -n "$ASUSCTL_INSTALLED_VERSION" ] && [ "$ASUSCTL_INSTALLED_VERSION_BASE" = "$ASUSCTL_VERSION" ]; then
+    ok "asusctl ya está actualizado (instalada: ${ASUSCTL_INSTALLED_VERSION}, última: ${ASUSCTL_VERSION}). Nada que hacer."
+    if [ "$CHECK_ONLY" -eq 1 ] || [ "$FORCE" -eq 0 ]; then
+        exit 0
+    fi
+    warn "--force: se recompilará la misma versión."
+else
+    if [ -n "$ASUSCTL_INSTALLED_VERSION" ]; then
+        log "Hay una actualización disponible: ${ASUSCTL_INSTALLED_VERSION} -> ${ASUSCTL_VERSION}"
+    else
+        log "asusctl no está instalado. Última versión disponible: ${ASUSCTL_VERSION}"
+    fi
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        echo "Para instalar/actualizar, ejecuta el script sin --check."
+        exit 10
+    fi
+fi
 
 mkdir -p "$STATE_DIR"
 : > "$STATE_FILE"   # el estado se reescribe en cada ejecución
@@ -132,6 +223,7 @@ sudo apt install -y \
     libzstd-dev libpcre2-dev \
     libsystemd-dev \
     npm \
+    gettext \
     libegl1-mesa-dev libvulkan-dev libglvnd-dev libwayland-dev
 
 # ---------------------------------------------------------------------------
@@ -160,77 +252,153 @@ source "$HOME/.cargo/env"
 rustup default stable
 
 # ---------------------------------------------------------------------------
+# Diagnóstico automático de dependencias de compilación
+# ---------------------------------------------------------------------------
+#
+# Objetivo: no descubrir las dependencias que faltan una a una, tras
+# minutos de compilación, cada vez que asusctl publica una versión nueva.
+#
+#  1) ANTES de compilar: se leen los build.rs del propio repo y se comprueba
+#     que existan las herramientas externas que ejecutan (p. ej. msgfmt).
+#  2) Si aun así falla la compilación: se lee el log, se detecta qué
+#     librería (.pc) o herramienta falta, se busca su paquete Debian con
+#     apt-file y se ofrece instalarlo y reintentar.
+#
+# Los paquetes que se añaden aquí de forma automática se listan al final,
+# para que los incorpores a la lista fija de dependencias (sección 1).
+
+APT_FILE_READY="no"
+AUTO_ADDED_PKGS=()
+
+# Prepara apt-file. Se llama siempre desde el shell principal (no dentro de
+# $(...)) para que la marca APT_FILE_READY persista; su salida va a stderr.
+ensure_apt_file() {
+    [ "$APT_FILE_READY" = "si" ] && return 0
+    log "Preparando apt-file (para saber qué paquete provee cada dependencia)" >&2
+    command -v apt-file >/dev/null 2>&1 || sudo apt install -y apt-file >&2
+    sudo apt-file update >&2 || true
+    APT_FILE_READY="si"
+}
+
+# Herramientas que ejecutan los build.rs del repo (Command::new("...")).
+scan_build_tools() {
+    { grep -rhoE 'Command::new\("[^"]+"\)' --include=build.rs . 2>/dev/null || true; } \
+        | sed -E 's/Command::new\("([^"]+)"\)/\1/' | sort -u
+}
+
+# Paquete Debian que provee /usr/bin/<herramienta>
+pkg_for_tool() {
+    { apt-file search -x "(^|/)usr/bin/$1\$" 2>/dev/null || true; } | cut -d: -f1 | sort -u | head -n1
+}
+
+# Paquete Debian que provee <nombre>.pc (pkg-config)
+pkg_for_pc() {
+    { apt-file search -x "(^|/)usr/(lib/x86_64-linux-gnu|share|lib)/pkgconfig/$1\.pc\$" 2>/dev/null || true; } \
+        | cut -d: -f1 | sort -u | head -n1
+}
+
+# Instala los paquetes que aún no lo estén. Devuelve 1 si no hay nada nuevo
+# que instalar o si el usuario lo rechaza (así el bucle de reintentos no
+# puede quedarse dando vueltas).
+install_missing() {
+    local to_install=() p
+    for p in "$@"; do
+        [ -n "$p" ] || continue
+        dpkg -s "$p" >/dev/null 2>&1 || to_install+=("$p")
+    done
+    [ ${#to_install[@]} -gt 0 ] || return 1
+
+    warn "Faltan dependencias de compilación: ${to_install[*]}"
+    if confirm "Faltan dependencias de compilación:
+
+${to_install[*]}
+
+¿Instalarlas ahora?" 14 70; then
+        sudo apt install -y "${to_install[@]}"
+        AUTO_ADDED_PKGS+=("${to_install[@]}")
+    else
+        return 1
+    fi
+}
+
+# 1) Comprobación previa: herramientas que usan los build.rs.
+preflight_build_tools() {
+    local tool pkgs=()
+    for tool in $(scan_build_tools); do
+        command -v "$tool" >/dev/null 2>&1 && continue
+        warn "Un build.rs usa '$tool' y no está instalado."
+        ensure_apt_file
+        pkgs+=("$(pkg_for_tool "$tool")")
+    done
+    [ ${#pkgs[@]} -gt 0 ] || return 0
+    install_missing "${pkgs[@]}" || die "Instala a mano las herramientas que faltan y vuelve a ejecutar el script."
+}
+
+# 2) Lee un log de compilación y devuelve los paquetes que faltan.
+missing_pkgs_from_log() {
+    local log_file="$1" name
+    {
+        # Librerías (pkg-config): "The system library `libseat` required by crate ..."
+        { grep -oE 'The system library `[^`]+`' "$log_file" || true; } | sed -E 's/.*`([^`]+)`.*/\1/'
+        # "No package 'xcb' found"
+        { grep -oE "No package '[^']+' found" "$log_file" || true; } | sed -E "s/No package '([^']+)' found/\1/"
+    } | sort -u | while read -r name; do
+        [ -n "$name" ] && pkg_for_pc "$name"
+    done
+    {
+        # Herramientas: "could not run msgfmt" / "msgfmt: command not found"
+        { grep -oE 'could not run [A-Za-z0-9_.+-]+' "$log_file" || true; } | awk '{print $4}'
+        { grep -oE '[A-Za-z0-9_.+-]+: (command not found|orden no encontrada)' "$log_file" || true; } | cut -d: -f1
+    } | sort -u | while read -r name; do
+        [ -n "$name" ] && pkg_for_tool "$name"
+    done
+    return 0
+}
+
+# Sustituye al "make" directo: compila y, si falla por una dependencia,
+# la detecta, la instala (con tu confirmación) y reintenta.
+build_with_dep_check() {
+    local build_log="$BUILD_DIR/build.log" attempt pkgs=()
+    for attempt in 1 2 3 4 5; do
+        if make 2>&1 | tee "$build_log"; then
+            return 0
+        fi
+        ensure_apt_file
+        mapfile -t pkgs < <(missing_pkgs_from_log "$build_log" | sort -u)
+        if [ ${#pkgs[@]} -eq 0 ]; then
+            warn "La compilación falló, pero no parece un problema de dependencias. Revisa $build_log"
+            return 1
+        fi
+        install_missing "${pkgs[@]}" || { warn "No hay nada nuevo que instalar. Revisa $build_log"; return 1; }
+        if [ "$attempt" -lt 5 ]; then
+            log "Reintentando la compilación (intento $((attempt + 1)) de 5)"
+        fi
+    done
+    warn "Se agotaron los 5 intentos. Revisa $build_log"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # 3. Compilar e instalar asusctl (vía checkinstall -> paquete dpkg real)
 # ---------------------------------------------------------------------------
 
-log "Averiguando la última versión de asusctl"
-
-# gitlab.com/asus-linux/asusctl (el repo "oficial" histórico) está
-# ARCHIVADO (solo lectura) desde hace tiempo: su última tag se quedó
-# congelada en 6.3.8 y nunca tendrá versiones más nuevas. El desarrollo
-# activo continúa en GitHub, en OpenGamingCollective/asusctl. Seguimos la
-# redirección pública de /releases/latest (sin pasar por api.github.com)
-# para no depender de un número de versión fijo.
-ASUSCTL_TAG=$(curl -sI https://github.com/OpenGamingCollective/asusctl/releases/latest \
-    | grep -i '^location:' \
-    | sed 's#.*/tag/##' \
-    | tr -d '\r\n')
-
-if [ -z "$ASUSCTL_TAG" ]; then
-    die "No se pudo determinar la última versión de asusctl (falló la redirección de /releases/latest). Revisa https://github.com/OpenGamingCollective/asusctl/releases"
-fi
-ASUSCTL_VERSION="$ASUSCTL_TAG"
-log "Última versión detectada: $ASUSCTL_VERSION"
-
-# ---------------------------------------------------------------------------
-# 3b. Comprobar si ya está instalada esta versión (evita recompilar en vano)
-# ---------------------------------------------------------------------------
-#
-# Como asusctl se instala vía checkinstall, queda registrado en dpkg con la
-# versión que le pasamos (--pkgversion). Aprovechamos eso para comparar la
-# versión ya instalada contra la última tag detectada, y así no lanzarnos a
-# clonar/compilar si no hay nada nuevo.
-
-ASUSCTL_INSTALLED_VERSION=""
-if dpkg -l asusctl 2>/dev/null | grep -q '^ii'; then
-    ASUSCTL_INSTALLED_VERSION=$(dpkg-query -W -f='${Version}' asusctl 2>/dev/null || true)
-fi
-
-if [ -n "$ASUSCTL_INSTALLED_VERSION" ]; then
-    echo "  - Versión instalada actualmente: $ASUSCTL_INSTALLED_VERSION"
-fi
-
-# checkinstall añade su propio sufijo de revisión Debian (p.ej. "-1") a la
-# versión que le pasamos con --pkgversion, así que dpkg guarda "6.5.0-1"
-# aunque la tag real sea "6.5.0". Para comparar de forma justa, nos
-# quedamos solo con la parte anterior al primer guion.
-ASUSCTL_INSTALLED_VERSION_BASE="${ASUSCTL_INSTALLED_VERSION%%-*}"
-
-if [ "$ASUSCTL_INSTALLED_VERSION_BASE" = "$ASUSCTL_VERSION" ]; then
-    if ! confirm "Ya tienes instalada la última versión de asusctl (${ASUSCTL_VERSION}).
-
-No hay actualización disponible. ¿Quieres forzar la recompilación e instalación de todas formas?" 12 70; then
-        ok "No hay actualización disponible. Saliendo sin hacer cambios."
-        exit 0
-    fi
-    log "Forzando recompilación de la versión $ASUSCTL_VERSION (elegido manualmente)"
-else
-    if [ -n "$ASUSCTL_INSTALLED_VERSION" ]; then
-        log "Hay una actualización disponible: $ASUSCTL_INSTALLED_VERSION -> $ASUSCTL_VERSION"
-    else
-        log "asusctl no está instalado todavía. Se instalará la versión $ASUSCTL_VERSION"
-    fi
-fi
-# Nota: la comparación de arriba usa ASUSCTL_INSTALLED_VERSION_BASE (sin el
-# sufijo de checkinstall); el mensaje sigue mostrando la versión completa
-# con sufijo porque es la que realmente aparece en dpkg.
+# La versión a instalar (ASUSCTL_VERSION) y la instalada ya se determinaron
+# al principio del script, antes de tocar apt, rustup o el fichero de estado.
+log "Versión a instalar: $ASUSCTL_VERSION (instalada: ${ASUSCTL_INSTALLED_VERSION:-ninguna})"
 
 log "Clonando y compilando asusctl v$ASUSCTL_VERSION"
 
-if [ ! -d "asusctl" ]; then
+# Si la carpeta ya existe (de una ejecución anterior) hay que llevarla al tag
+# nuevo: antes se reutilizaba tal cual y se recompilaba el código VIEJO
+# registrándolo en dpkg como si fuera la versión nueva.
+if [ ! -d "asusctl/.git" ]; then
     git clone --depth=1 https://github.com/OpenGamingCollective/asusctl.git -b "$ASUSCTL_VERSION" asusctl
+    cd asusctl
+else
+    cd asusctl
+    git fetch --depth=1 origin tag "$ASUSCTL_VERSION"
+    git checkout -q -f "$ASUSCTL_VERSION"
 fi
-cd asusctl
 
 # Fix de permisos udev: las reglas de asusctl usaban por defecto el grupo
 # "wheel" (convención de Fedora/Arch); Debian/Ubuntu usa "sudo". En
@@ -250,7 +418,10 @@ if [ -n "$ASUSD_RULES_FILE" ] && grep -q 'GROUP="wheel"' "$ASUSD_RULES_FILE"; th
     sed -i 's/GROUP="wheel"/GROUP="sudo"/g' "$ASUSD_RULES_FILE"
 fi
 
-make
+log "Comprobando herramientas que necesitan los build.rs de esta versión"
+preflight_build_tools
+
+build_with_dep_check || die "La compilación falló. Revisa $BUILD_DIR/build.log"
 
 log "Empaquetando asusctl con checkinstall (para que quede registrado en dpkg)"
 sudo checkinstall \
@@ -322,6 +493,11 @@ if systemctl is-active --quiet asusd; then
     asusctl info || warn "asusctl info falló pese a que asusd está activo; revisa 'asusctl --help' por si la CLI ha cambiado de nuevo. Detalle: 'journalctl -u asusd'."
 else
     warn "asusd no está activo, se omite 'asusctl info' (no hay daemon con el que hablar; ver el aviso de la sección 3)."
+fi
+
+if [ ${#AUTO_ADDED_PKGS[@]} -gt 0 ]; then
+    warn "Se instalaron dependencias que no estaban en la lista fija: ${AUTO_ADDED_PKGS[*]}"
+    warn "Añádelas al 'sudo apt install' de la sección 1 para no depender del diagnóstico la próxima vez."
 fi
 
 log "Instalación completada. Estado guardado en $STATE_FILE para el revertido."
